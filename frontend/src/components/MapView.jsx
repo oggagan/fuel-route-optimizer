@@ -10,16 +10,14 @@ import {
 } from "react-leaflet";
 import L from "leaflet";
 
-// Default marker icons do not load under bundlers without this fix.
-import markerIcon from "leaflet/dist/images/marker-icon.png";
-import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
-import markerShadow from "leaflet/dist/images/marker-shadow.png";
-
-L.Icon.Default.mergeOptions({
-  iconUrl: markerIcon,
-  iconRetinaUrl: markerIcon2x,
-  shadowUrl: markerShadow,
-});
+function numberedIcon(n, active) {
+  return L.divIcon({
+    className: "fuel-pin-wrap",
+    html: `<div class="fuel-pin${active ? " active" : ""}"><span>${n}</span></div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  });
+}
 
 function FitBounds({ route }) {
   const map = useMap();
@@ -31,9 +29,19 @@ function FitBounds({ route }) {
   return null;
 }
 
+function FlyTo({ target }) {
+  const map = useMap();
+  useEffect(() => {
+    if (target) {
+      map.flyTo([target.lat, target.lon], 9, { duration: 0.8 });
+    }
+  }, [target, map]);
+  return null;
+}
+
 const US_CENTER = [39.5, -98.35];
 
-export default function MapView({ result, activeStop }) {
+export default function MapView({ result, activeStop, flyTo }) {
   const route = result?.route || [];
   const stops = result?.fuel_stops || [];
 
@@ -64,7 +72,7 @@ export default function MapView({ result, activeStop }) {
         </>
       )}
       {stops.map((s, i) => (
-        <Marker key={i} position={[s.lat, s.lon]}>
+        <Marker key={i} position={[s.lat, s.lon]} icon={numberedIcon(i + 1, activeStop === i)}>
           <Popup>
             <strong>{s.name}</strong>
             <br />
@@ -73,13 +81,7 @@ export default function MapView({ result, activeStop }) {
           </Popup>
         </Marker>
       ))}
-      {activeStop != null && stops[activeStop] && (
-        <CircleMarker
-          center={[stops[activeStop].lat, stops[activeStop].lon]}
-          radius={16}
-          pathOptions={{ color: "#f59e0b", weight: 3, fillOpacity: 0.15 }}
-        />
-      )}
+      <FlyTo target={flyTo} />
     </MapContainer>
   );
 }
