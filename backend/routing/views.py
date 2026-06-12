@@ -61,14 +61,23 @@ def route(request):
             "latitude", "longitude",
         )
     )
-    on_route = find_on_route_stations(points, stations, settings.STATION_CORRIDOR_MILES)
 
-    try:
-        stops, total_cost = choose_fuel_stops(
-            on_route, total_miles, settings.VEHICLE_RANGE_MILES, settings.VEHICLE_MPG
-        )
-    except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+    # Stations are geocoded to their city centre, so a stop on the highway can
+    # sit a little off the route line. Start with a tight corridor and widen it
+    # if a stretch has no reachable station, rather than failing outright.
+    base = settings.STATION_CORRIDOR_MILES
+    stops, total_cost, last_error = None, None, None
+    for corridor in (base, base * 3, base * 6, base * 12):
+        on_route = find_on_route_stations(points, stations, corridor)
+        try:
+            stops, total_cost = choose_fuel_stops(
+                on_route, total_miles, settings.VEHICLE_RANGE_MILES, settings.VEHICLE_MPG
+            )
+            break
+        except ValueError as exc:
+            last_error = exc
+    if stops is None:
+        return Response({"error": str(last_error)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     return Response(
         {

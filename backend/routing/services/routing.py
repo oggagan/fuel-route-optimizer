@@ -5,22 +5,45 @@ as possible: a single POST returns both the geocoded-to-driving route geometry
 and the total distance, so one request per user lookup is enough.
 """
 
+import time
+
 import requests
 from django.conf import settings
 
 ORS_BASE = "https://api.openrouteservice.org"
 _TIMEOUT = 20
+_RETRIES = 2
 
 
 class RoutingError(Exception):
     pass
 
 
+def _request(method, url, **kwargs):
+    """Call ORS with a small retry so a transient 5xx does not fail the request."""
+    last = None
+    for attempt in range(_RETRIES + 1):
+        try:
+            resp = requests.request(method, url, timeout=_TIMEOUT, **kwargs)
+        except requests.RequestException as exc:
+            last = exc
+        else:
+            if resp.status_code < 500:
+                return resp
+            last = RoutingError(f"ORS returned {resp.status_code}")
+        if attempt < _RETRIES:
+            time.sleep(0.6 * (attempt + 1))
+    if isinstance(last, Exception):
+        raise RoutingError(str(last))
+    raise RoutingError("ORS request failed.")
+
+
 def geocode(text):
     """Resolve a free-text US place to (lat, lon). One ORS call."""
     if not settings.ORS_API_KEY:
         raise RoutingError("ORS_API_KEY is not configured.")
-    resp = requests.get(
+    resp = _request(
+        "GET",
         f"{ORS_BASE}/geocode/search",
         params={
             "api_key": settings.ORS_API_KEY,
@@ -28,7 +51,6 @@ def geocode(text):
             "boundary.country": "US",
             "size": 1,
         },
-        timeout=_TIMEOUT,
     )
     if resp.status_code != 200:
         raise RoutingError(f"Geocoding failed ({resp.status_code}).")
@@ -47,11 +69,11 @@ def driving_route(start_lat, start_lon, finish_lat, finish_lon):
     """
     if not settings.ORS_API_KEY:
         raise RoutingError("ORS_API_KEY is not configured.")
-    resp = requests.post(
+    resp = _request(
+        "POST",
         f"{ORS_BASE}/v2/directions/driving-hgv/geojson",
         headers={"Authorization": settings.ORS_API_KEY},
         json={"coordinates": [[start_lon, start_lat], [finish_lon, finish_lat]]},
-        timeout=_TIMEOUT,
     )
     if resp.status_code != 200:
         raise RoutingError(f"Routing failed ({resp.status_code}).")
