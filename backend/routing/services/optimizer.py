@@ -78,48 +78,96 @@ def find_on_route_stations(points, stations, corridor_miles):
 
 
 def choose_fuel_stops(on_route, total_miles, vehicle_range, mpg):
-    """Greedy cheapest-reachable selection respecting the vehicle range.
+    """Pick the fuel stops that minimise total fuel cost for the whole trip.
 
-    Returns (stops, total_cost). `stops` is the ordered list of chosen
-    OnRouteStation objects, each annotated with gallons and cost for the leg it
-    powers. Raises ValueError if a gap longer than the range has no station.
+    The vehicle covers `total_miles` and burns `total_miles / mpg` gallons. We
+    choose stops so that no leg exceeds the vehicle range and the total cost of
+    that fuel is as low as possible. This is solved exactly with a dynamic
+    program over the on-route stations rather than a greedy heuristic, so it
+    never makes a needless stop at a pricier station.
+
+    Returns (stops, total_cost). Each chosen stop is annotated with the gallons
+    and cost of the leg its fuel powers. Raises ValueError if some stretch of
+    the route has no station within range.
     """
     # Collapse stations that sit at effectively the same point, keeping the
     # cheapest, so the list stays clean.
     deduped = []
-    for s in on_route:
+    for s in sorted(on_route, key=lambda r: r.mile):
         if deduped and abs(s.mile - deduped[-1].mile) < 0.5:
             if s.station.retail_price < deduped[-1].station.retail_price:
                 deduped[-1] = s
             continue
         deduped.append(s)
 
-    stops = []
-    position = 0.0
-    remaining = vehicle_range  # miles of range left in the tank (starts full)
+    # A station sitting essentially at the destination is not a useful stop -
+    # you have already arrived - so drop anything within half a mile of the end.
+    deduped = [s for s in deduped if s.mile < total_miles - 0.5]
 
-    while position + remaining < total_miles - 1e-6:
-        window = [s for s in deduped if position < s.mile <= position + remaining + 1e-6]
-        if not window:
-            raise ValueError(
-                "No fuel station available within range for part of this route."
-            )
-        # cheapest fuel; on a tie, go farther to make progress
-        stop = min(window, key=lambda s: (s.station.retail_price, -s.mile))
-        remaining -= stop.mile - position
-        position = stop.mile
-        remaining = vehicle_range  # fill to full
-        stops.append(stop)
+    # Trip fits in a single tank - no fuel stop needed.
+    if total_miles <= vehicle_range:
+        return [], 0.0
 
-    # Attribute each leg of the trip to the fill that powers it and sum the cost.
-    total_cost = 0.0
-    for i, stop in enumerate(stops):
-        next_mile = stops[i + 1].mile if i + 1 < len(stops) else total_miles
+    n = len(deduped)
+    if n == 0:
+        raise ValueError("No fuel station available within range for this route.")
+
+    miles = [s.mile for s in deduped]
+    price = [s.station.retail_price for s in deduped]
+    INF = float("inf")
+
+    # dp[j] = min cost to have j as a stop, with fuel paid for from mile 0 to j.
+    # The first stop's price also covers the initial stretch from the origin.
+    dp = [INF] * n
+    parent = [-1] * n
+    for j in range(n):
+        if miles[j] <= vehicle_range + 1e-9:
+            dp[j] = price[j] * miles[j] / mpg
+
+    for j in range(n):
+        if dp[j] == INF:
+            continue
+        for l in range(j + 1, n):
+            gap = miles[l] - miles[j]
+            if gap > vehicle_range + 1e-9:
+                break  # miles is sorted, so every later l is even farther
+            cost = dp[j] + price[j] * gap / mpg
+            if cost < dp[l]:
+                dp[l] = cost
+                parent[l] = j
+
+    # Finish: from the last stop we must be able to coast to the destination.
+    best, best_k = INF, -1
+    for k in range(n):
+        if dp[k] == INF:
+            continue
+        if total_miles - miles[k] <= vehicle_range + 1e-9:
+            total = dp[k] + price[k] * (total_miles - miles[k]) / mpg
+            if total < best:
+                best, best_k = total, k
+
+    if best_k == -1:
+        raise ValueError(
+            "No fuel station available within range for part of this route."
+        )
+
+    # Reconstruct the chosen stops in order.
+    chosen = []
+    k = best_k
+    while k != -1:
+        chosen.append(deduped[k])
+        k = parent[k]
+    chosen.reverse()
+
+    # Attribute each leg of fuel to the stop that pays for it. The first stop
+    # also covers the stretch from the origin to itself.
+    for i, stop in enumerate(chosen):
+        next_mile = chosen[i + 1].mile if i + 1 < len(chosen) else total_miles
         leg_miles = next_mile - stop.mile
+        if i == 0:
+            leg_miles += stop.mile
         gallons = leg_miles / mpg
-        cost = gallons * stop.station.retail_price
         stop.gallons = round(gallons, 2)
-        stop.cost = round(cost, 2)
-        total_cost += cost
+        stop.cost = round(gallons * stop.station.retail_price, 2)
 
-    return stops, round(total_cost, 2)
+    return chosen, round(best, 2)
