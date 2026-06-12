@@ -19,8 +19,11 @@ page app with a Leaflet map.
 3. Stations that fall within a few miles of the route are located using a
    spatial grid over the route vertices, and projected onto the route to get
    their mileage.
-4. A greedy optimizer walks the route and, inside each range-limited window,
-   refuels at the cheapest reachable station, then totals the fuel cost.
+4. A dynamic program over the on-route stations selects the set of stops that
+   minimises the total fuel cost while never exceeding the vehicle range. This
+   is exact rather than a greedy heuristic, so it never makes a needless stop at
+   a pricier station. If a stretch of the route has no station within a tight
+   corridor, the corridor is widened before giving up.
 
 ### External API usage
 
@@ -39,6 +42,9 @@ how many stops a route has.
 - Station coordinates come from a city-level dataset, so a stop is placed at the
   centre of its city. This is accurate enough to decide which stations lie along
   a long-haul route.
+- The supplied price list is concentrated in the Midwest and East. A few western
+  corridors (for example San Francisco to Las Vegas) have no listed station
+  within range, and the API returns a clear message rather than a wrong answer.
 
 ## API
 
