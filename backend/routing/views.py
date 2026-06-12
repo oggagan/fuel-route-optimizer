@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .models import FuelStation
+from .services.cities import search as search_cities
 from .services.optimizer import choose_fuel_stops, find_on_route_stations
 from .services.routing import RoutingError, driving_route, geocode
 
@@ -11,6 +12,19 @@ from .services.routing import RoutingError, driving_route, geocode
 @api_view(["GET"])
 def health(request):
     return Response({"status": "ok", "stations": FuelStation.objects.count()})
+
+
+@api_view(["GET"])
+def cities(request):
+    """Autocomplete suggestions for the location inputs."""
+    return Response({"results": search_cities(request.GET.get("q", ""))})
+
+
+def _resolve_endpoint(label, lat, lon, query):
+    """Use client-supplied coordinates when present, else geocode the text."""
+    if lat is not None and lon is not None:
+        return float(lat), float(lon), (label or query)
+    return geocode(query)
 
 
 @api_view(["POST"])
@@ -29,9 +43,14 @@ def route(request):
         )
 
     try:
-        # Resolve endpoints, then one routing call for the whole geometry.
-        s_lat, s_lon, s_label = geocode(start)
-        f_lat, f_lon, f_label = geocode(finish)
+        # When the client picks from the autocomplete it sends coordinates, so
+        # we can skip geocoding and make only a single routing call.
+        s_lat, s_lon, s_label = _resolve_endpoint(
+            data.get("start_label"), data.get("start_lat"), data.get("start_lon"), start
+        )
+        f_lat, f_lon, f_label = _resolve_endpoint(
+            data.get("finish_label"), data.get("finish_lat"), data.get("finish_lon"), finish
+        )
         points, total_miles = driving_route(s_lat, s_lon, f_lat, f_lon)
     except RoutingError as exc:
         return Response({"error": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
